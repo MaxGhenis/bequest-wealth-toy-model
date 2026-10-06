@@ -6,13 +6,19 @@ from wealth_model.mpc import calculate_consumption
 
 
 class Person:
-    def __init__(self, age, initial_wealth, parent_wealth_rank=None):
-        self.age = age
-        self.wealth = initial_wealth
-        self.parent_wealth_rank = parent_wealth_rank
+    def __init__(
+        self,
+        wealth_history,
+        labor_income_history,
+        capital_income_history,
+        consumption_history,
+    ):
+        self.wealth_history = wealth_history
+        self.labor_income_history = labor_income_history
+        self.capital_income_history = capital_income_history
+        self.consumption_history = consumption_history
 
         # Initialize histories
-        self.wealth_history = [initial_wealth]
         self.labor_income_history = []
         self.capital_income_history = []
         self.consumption_history = []
@@ -88,54 +94,100 @@ def run_simulation(n_people=10000, mpc_params=None):
     parent_wealth = pareto.rvs(PARETO_SHAPE, size=n_people) * WEALTH_SCALE * BASE_INCOME
     parent_ranks = rankdata(parent_wealth) / len(parent_wealth)
 
-    # Create children (start with zero wealth)
-    children = [Person(CHILD_START_AGE, 0, parent_rank) for parent_rank in parent_ranks]
+    # Initialize arrays for tracking
+    n_years = 60
+    wealth = np.zeros((n_years + 1, n_people))
+    labor_income = np.zeros((n_years, n_people))
+    capital_income = np.zeros((n_years, n_people))
+    consumption = np.zeros((n_years, n_people))
 
-    # Generate bequest timing
+    # Set initial conditions based on parent wealth
+    base_labor_incomes = BASE_INCOME * (1 + PARENT_WEALTH_EFFECT * parent_ranks)
+
+    # Generate bequest information
     will_get_bequest = parent_ranks >= NO_BEQUEST_PROB
     death_ages = np.random.randint(BEQUEST_AGE_MIN, BEQUEST_AGE_MAX + 1, size=n_people)
     bequest_shares = np.random.random(n_people)
     bequests = np.where(will_get_bequest, parent_wealth * bequest_shares, 0)
 
-    # Simulate all children's lives
-    n_years = 60
+    # Simulate years
     for year in range(n_years):
-        for i, child in enumerate(children):
-            # Add bequest if parent dies this year
-            if child.age == death_ages[i]:
-                child.wealth += bequests[i]
+        age = CHILD_START_AGE + year
 
-            child.simulate_year(year, mpc_params)
+        # Add bequests if parent dies this year
+        bequest_mask = age == death_ages
+        wealth[year] = np.where(bequest_mask, wealth[year] + bequests, wealth[year])
+
+        # Labor income
+        if age < RETIREMENT_AGE:
+            growth_factor = (1 + INCOME_GROWTH_RATE) ** year
+            labor_income[year] = (
+                base_labor_incomes
+                * growth_factor
+                * np.random.lognormal(0, INCOME_VOLATILITY, n_people)
+            )
+        else:
+            labor_income[year] = base_labor_incomes * RETIREMENT_INCOME_RATIO
+
+        # Capital income
+        return_factors = 1 + np.random.normal(RETURN_MEAN, RETURN_VOLATILITY, n_people)
+        capital_income[year] = wealth[year] * (return_factors - 1)
+
+        # Total income
+        total_income = labor_income[year] + capital_income[year]
+
+        # Consumption
+        scaled_income = np.maximum(total_income / mpc_params["reference_income"], 1e-6)
+        mpcs = mpc_params["base_mpc"] * np.power(
+            scaled_income, mpc_params["elasticity"]
+        )
+        raw_consumption = mpcs * total_income
+
+        # Apply borrowing constraints
+        max_possible = wealth[year] + total_income
+        min_consumption = BASE_INCOME * 0.2
+        consumption[year] = np.clip(raw_consumption, min_consumption, max_possible)
+
+        # Update wealth
+        wealth[year + 1] = wealth[year] + total_income - consumption[year]
 
     # Calculate final rankings
     bequest_ranks = np.zeros(n_people)
     positive_bequest_mask = bequests > 0
     n_positive = np.sum(positive_bequest_mask)
-    if n_positive > 0:  # Handle case where no one gets bequest
+
+    if n_positive > 0:
         positive_ranks = rankdata(bequests[positive_bequest_mask]) / n_positive
         bequest_ranks[positive_bequest_mask] = 0.4 + 0.6 * positive_ranks
 
-    final_wealth = np.array([child.wealth_history[-1] for child in children])
-    wealth_ranks = (rankdata(final_wealth) - 1) / (n_people - 1)
+    wealth_ranks = rankdata(wealth[-1]) / n_people
 
-    return children, bequest_ranks, wealth_ranks
+    return bequest_ranks, wealth_ranks
 
 
-def calculate_rank_statistics(bequest_ranks, wealth_ranks, n_bins=100):
+def calculate_rank_statistics(bequest_ranks, wealth_ranks):
     """Calculate mean and std of child ranks by bequest rank bin"""
-    bins = np.linspace(0, 1, n_bins + 1)
+    # Create bins
+    bins = np.arange(0, 1.01, 0.01)  # 0 to 1 in steps of 0.01
     bin_centers = (bins[1:] + bins[:-1]) / 2
 
-    mean_ranks = []
-    std_ranks = []
+    # Initialize arrays
+    mean_ranks = np.zeros(len(bins) - 1)
+    std_ranks = np.zeros(len(bins) - 1)
 
-    for i in range(n_bins):
-        mask = (bequest_ranks >= bins[i]) & (bequest_ranks < bins[i + 1])
-        if np.sum(mask) > 0:
-            mean_ranks.append(np.mean(wealth_ranks[mask]))
-            std_ranks.append(np.std(wealth_ranks[mask]))
-        else:
-            mean_ranks.append(np.nan)
-            std_ranks.append(np.nan)
+    # Handle no-bequest cases (rank 0) separately
+    no_bequest_mask = bequest_ranks < 0.1
+    if np.any(no_bequest_mask):
+        mean_ranks[0] = np.mean(wealth_ranks[no_bequest_mask])
+        std_ranks[0] = np.std(wealth_ranks[no_bequest_mask])
 
-    return bin_centers, np.array(mean_ranks), np.array(std_ranks)
+    # Calculate statistics for positive bequests
+    positive_mask = bequest_ranks >= 0.4
+    if np.any(positive_mask):
+        for i in range(1, len(bins) - 1):
+            bin_mask = (bequest_ranks >= bins[i]) & (bequest_ranks < bins[i + 1])
+            if np.sum(bin_mask) > 0:
+                mean_ranks[i] = np.mean(wealth_ranks[bin_mask])
+                std_ranks[i] = np.std(wealth_ranks[bin_mask])
+
+    return bin_centers, mean_ranks, std_ranks

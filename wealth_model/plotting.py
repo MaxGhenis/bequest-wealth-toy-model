@@ -69,69 +69,93 @@ def plot_rank_relationships(bin_centers, mean_ranks, std_ranks):
         rows=1, cols=2, subplot_titles=("Rank-Rank Relationship", "Rank Volatility")
     )
 
-    # Rank-rank plot with clear data points
+    # Split data into no-bequest and positive bequest sections
+    no_bequest_mask = bin_centers < 0.1
+    positive_mask = bin_centers >= 0.4
+
+    # Rank-Rank plot: No bequest point
+    if np.any(no_bequest_mask):
+        fig.add_trace(
+            go.Scatter(
+                x=[0],
+                y=[mean_ranks[no_bequest_mask][0]],
+                mode="markers",
+                name="No Bequest",
+                marker=dict(size=10, color="blue"),
+                showlegend=True,
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Rank-Rank plot: Positive bequest line
     fig.add_trace(
         go.Scatter(
-            x=[0],
-            y=[np.nanmean(mean_ranks[bin_centers < 0.1])],
-            name="No Bequest",
-            mode="markers",
-            marker_size=10,
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=bin_centers[bin_centers >= 0.4],
-            y=mean_ranks[bin_centers >= 0.4],
-            name="Positive Bequest",
+            x=bin_centers[positive_mask],
+            y=mean_ranks[positive_mask],
             mode="lines+markers",
+            name="Positive Bequest",
+            line=dict(color="blue"),
+            marker=dict(size=4),
+            showlegend=True,
         ),
         row=1,
         col=1,
     )
 
-    # 45-degree line
+    # Perfect persistence line
     fig.add_trace(
         go.Scatter(
             x=[0, 1],
             y=[0, 1],
+            mode="lines",
             name="Perfect Persistence",
             line=dict(dash="dash", color="gray"),
+            showlegend=True,
         ),
         row=1,
         col=1,
     )
 
-    # Volatility plot
+    # Volatility plot: No bequest point
+    if np.any(no_bequest_mask):
+        fig.add_trace(
+            go.Scatter(
+                x=[0],
+                y=[std_ranks[no_bequest_mask][0]],
+                mode="markers",
+                name="No Bequest Volatility",
+                marker=dict(size=10, color="red"),
+                showlegend=True,
+            ),
+            row=1,
+            col=2,
+        )
+
+    # Volatility plot: Positive bequest line
     fig.add_trace(
         go.Scatter(
-            x=[0],
-            y=[np.nanstd(std_ranks[bin_centers < 0.1])],
-            name="No Bequest Volatility",
-            mode="markers",
-            marker_size=10,
-        ),
-        row=1,
-        col=2,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=bin_centers[bin_centers >= 0.4],
-            y=std_ranks[bin_centers >= 0.4],
-            name="Positive Bequest Volatility",
+            x=bin_centers[positive_mask],
+            y=std_ranks[positive_mask],
+            mode="lines+markers",
+            name="Bequest Volatility",
+            line=dict(color="red"),
+            marker=dict(size=4),
+            showlegend=True,
         ),
         row=1,
         col=2,
     )
 
     # Update layout
-    fig.update_xaxes(title="Bequest Rank", range=[-0.1, 1.1])
-    fig.update_yaxes(title="Child Wealth Rank", range=[-0.1, 1.1], row=1, col=1)
-    fig.update_yaxes(title="Std. Dev. of Child Ranks", row=1, col=2)
+    fig.update_xaxes(title="Bequest Rank", range=[-0.05, 1.05], row=1, col=1)
+    fig.update_xaxes(title="Bequest Rank", range=[-0.05, 1.05], row=1, col=2)
+    fig.update_yaxes(title="Child Wealth Rank", range=[-0.05, 1.05], row=1, col=1)
+    fig.update_yaxes(title="Std Dev of Child Ranks", row=1, col=2)
 
-    fig.update_layout(height=500, showlegend=True)
+    fig.update_layout(
+        height=500, showlegend=True, title="Intergenerational Wealth Mobility"
+    )
 
     return fig
 
